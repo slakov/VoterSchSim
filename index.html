@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RIG Opinion Dynamics Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-1: #f4efe4;
+      --bg-2: #d9f2ef;
+      --card: rgba(255, 255, 255, 0.82);
+      --card-border: rgba(15, 76, 92, 0.22);
+      --ink: #143642;
+      --muted: #537a84;
+      --a: #ff6f59;
+      --b: #2d7dd2;
+      --group: #2f4858;
+      --edge: rgba(59, 93, 107, 0.28);
+      --accent: #1b998b;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Space Grotesk", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 16%, rgba(255, 111, 89, 0.16), transparent 38%),
+        radial-gradient(circle at 82% 18%, rgba(27, 153, 139, 0.16), transparent 34%),
+        linear-gradient(135deg, var(--bg-1), var(--bg-2));
+    }
+
+    .glass {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 10px 30px rgba(20, 54, 66, 0.08);
+    }
+
+    .metric-value,
+    .mono {
+      font-family: "IBM Plex Mono", monospace;
+    }
+
+    input[type="range"] {
+      accent-color: var(--accent);
+    }
+
+    .mode-pill {
+      transition: all 150ms ease;
+    }
+
+    .mode-pill:has(input:checked) {
+      background: rgba(27, 153, 139, 0.16);
+      border-color: rgba(27, 153, 139, 0.46);
+      color: #0f4c5c;
+    }
+
+    #networkSvg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      border-radius: 0.85rem;
+      background:
+        radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.9), rgba(245, 251, 250, 0.86));
+    }
+  </style>
+</head>
+<body>
+  <div class="min-h-screen p-3 md:p-5">
+    <div class="grid grid-cols-1 xl:grid-cols-[345px_1fr] gap-4 h-[calc(100vh-1.5rem)] md:h-[calc(100vh-2.5rem)]">
+      <aside class="glass rounded-2xl p-4 md:p-5 overflow-y-auto">
+        <h1 class="text-2xl font-bold tracking-tight">RIG Opinion Lab</h1>
+        <p class="text-sm text-slate-600 mt-1">Random Intersection Graph with coupled Schelling + Voter dynamics.</p>
+
+        <section class="mt-5 space-y-3">
+          <h2 class="text-sm uppercase tracking-[0.12em] text-slate-500">Initialization</h2>
+          <label class="block text-sm">
+            <span class="font-medium">Individuals (n)</span>
+            <input id="nInput" type="number" min="10" max="199" value="100" class="w-full mt-1 rounded-lg border border-slate-300 px-3 py-2 bg-white/70" />
+          </label>
+          <label class="block text-sm">
+            <span class="font-medium">Groups (m)</span>
+            <input id="mInput" type="number" min="1" max="120" value="3" class="w-full mt-1 rounded-lg border border-slate-300 px-3 py-2 bg-white/70" />
+          </label>
+          <label class="block text-sm">
+            <div class="flex items-center justify-between">
+              <span class="font-medium">Initial Connection Probability (p)</span>
+              <span id="pValue" class="mono text-xs">0.08</span>
+            </div>
+            <input id="pInput" type="range" min="0.01" max="0.25" step="0.01" value="0.08" class="w-full mt-1" />
+          </label>
+          <p class="text-xs text-slate-600">
+            <span class="font-semibold">Help:</span> n = people, m = groups, p controls initial edge density. Change n/m/p/ratio, then press <span class="font-semibold">Reset</span> to regenerate.
+          </p>
+          <p id="clampNote" class="text-xs text-amber-700 min-h-[1rem]"></p>
+          <p id="initStatus" class="text-xs text-teal-700 min-h-[1rem]"></p>
+        </section>
+
+        <section class="mt-5 space-y-3">
+          <h2 class="text-sm uppercase tracking-[0.12em] text-slate-500">Opinion Setup</h2>
+          <label class="block text-sm">
+            <span class="font-medium">Initial Distribution</span>
+            <select id="ratioInput" class="w-full mt-1 rounded-lg border border-slate-300 px-3 py-2 bg-white/70">
+              <option value="0.5" selected>50 / 50</option>
+              <option value="0.6">60 / 40</option>
+              <option value="0.7">70 / 30</option>
+              <option value="0.3">30 / 70</option>
+            </select>
+          </label>
+          <p class="text-xs text-slate-600">
+            <span class="font-semibold">Help:</span> Sets the initial State A vs State B split before dynamics begin.
+          </p>
+        </section>
+
+        <section class="mt-5 space-y-3">
+          <h2 class="text-sm uppercase tracking-[0.12em] text-slate-500">Dynamic Rates</h2>
+          <label class="block text-sm">
+            <div class="flex items-center justify-between">
+              <span class="font-medium">Joining Rate</span>
+              <span id="joinValue" class="mono text-xs">0.03</span>
+            </div>
+            <input id="joinInput" type="range" min="0" max="0.2" step="0.01" value="0.03" class="w-full mt-1" />
+          </label>
+          <label class="block text-sm">
+            <div class="flex items-center justify-between">
+              <span class="font-medium">Leaving Rate (base)</span>
+              <span id="leaveValue" class="mono text-xs">0.22</span>
+            </div>
+            <input id="leaveInput" type="range" min="0" max="0.7" step="0.01" value="0.22" class="w-full mt-1" />
+          </label>
+          <label class="block text-sm">
+            <div class="flex items-center justify-between">
+              <span class="font-medium">Voter Rate</span>
+              <span id="voterValue" class="mono text-xs">0.28</span>
+            </div>
+            <input id="voterInput" type="range" min="0" max="1" step="0.01" value="0.28" class="w-full mt-1" />
+          </label>
+          <p class="text-xs text-slate-600">
+            <span class="font-semibold">Help:</span> Leaving now uses group composition: leave probability = base leaving rate x minority pressure. Joining/Leaving alter memberships; Voter controls opinion updates each step.
+          </p>
+        </section>
+
+        <section class="mt-5 space-y-3">
+          <h2 class="text-sm uppercase tracking-[0.12em] text-slate-500">Mode</h2>
+          <div class="grid grid-cols-1 gap-2">
+            <label class="mode-pill flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 cursor-pointer">
+              <input type="radio" name="mode" value="schelling" class="accent-teal-600" />
+              <span class="text-sm">Schelling-only</span>
+            </label>
+            <label class="mode-pill flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 cursor-pointer">
+              <input type="radio" name="mode" value="voter" class="accent-teal-600" />
+              <span class="text-sm">Voter-only</span>
+            </label>
+            <label class="mode-pill flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 cursor-pointer">
+              <input type="radio" name="mode" value="combined" class="accent-teal-600" checked />
+              <span class="text-sm">Combined</span>
+            </label>
+          </div>
+          <p class="text-xs text-slate-600">
+            <span class="font-semibold">Help:</span> Chooses whether structural updates, opinion updates, or both run per step.
+          </p>
+        </section>
+
+        <section class="mt-5 space-y-3">
+          <h2 class="text-sm uppercase tracking-[0.12em] text-slate-500">Simulation</h2>
+          <div class="grid grid-cols-2 gap-2">
+            <button id="playBtn" class="rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-medium px-3 py-2">Play</button>
+            <button id="pauseBtn" class="rounded-lg bg-slate-700 hover:bg-slate-800 text-white font-medium px-3 py-2">Pause</button>
+            <button id="stepBtn" class="rounded-lg bg-white border border-slate-300 hover:bg-slate-50 font-medium px-3 py-2">Step</button>
+            <button id="resetBtn" class="rounded-lg bg-white border border-slate-300 hover:bg-slate-50 font-medium px-3 py-2">Reset</button>
+          </div>
+        </section>
+
+        <section class="mt-6 space-y-2">
+          <div class="flex items-center gap-3 text-sm">
+            <span class="inline-block h-3.5 w-3.5 rounded-full" style="background: var(--a)"></span>
+            <span>State A individuals</span>
+          </div>
+          <div class="flex items-center gap-3 text-sm">
+            <span class="inline-block h-3.5 w-3.5 rounded-full" style="background: var(--b)"></span>
+            <span>State B individuals</span>
+          </div>
+          <div class="flex items-center gap-3 text-sm">
+            <span class="inline-block h-3.5 w-3.5 rotate-45" style="background: var(--group)"></span>
+            <span>Group nodes</span>
+          </div>
+        </section>
+      </aside>
+
+      <main class="grid grid-rows-[auto_1fr_220px] gap-4 min-h-0">
+        <section class="glass rounded-2xl p-4">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div class="rounded-xl bg-white/75 border border-slate-200 px-4 py-3">
+              <p class="text-xs uppercase tracking-[0.14em] text-slate-500">Step</p>
+              <p id="metricStep" class="metric-value text-2xl mt-1">0</p>
+            </div>
+            <div class="rounded-xl bg-white/75 border border-slate-200 px-4 py-3">
+              <p class="text-xs uppercase tracking-[0.14em] text-slate-500">Active Edges</p>
+              <p id="metricEdges" class="metric-value text-2xl mt-1">0</p>
+            </div>
+            <div class="rounded-xl bg-white/75 border border-slate-200 px-4 py-3">
+              <p class="text-xs uppercase tracking-[0.14em] text-slate-500">Opinion Split</p>
+              <p id="metricSplit" class="metric-value text-lg mt-2">A 0% | B 0%</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="glass rounded-2xl p-3 md:p-4 min-h-0">
+          <div class="h-full rounded-xl overflow-hidden border border-slate-200/70">
+            <svg id="networkSvg" aria-label="Live Random Intersection Graph"></svg>
+          </div>
+        </section>
+
+        <section class="glass rounded-2xl p-4 min-h-0">
+          <p class="text-sm font-medium text-slate-700 mb-2">Opinion proportions over time</p>
+          <div class="h-[170px]">
+            <canvas id="opinionChart"></canvas>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const MAX_TOTAL_NODES = 200;
+      const MIN_INDIVIDUALS = 10;
+      const MAX_INDIVIDUALS = 199;
+      const MIN_GROUPS = 1;
+      const MAX_GROUPS = 120;
+      const HISTORY_LIMIT = 320;
+      const STEP_INTERVAL_MS = 160;
+      const DEFAULTS = {
+        n: 100,
+        m: 3,
+        p: 0.08,
+        initialA: 0.5,
+        joiningRate: 0.03,
+        leavingRate: 0.22,
+        voterRate: 0.28,
+        mode: "combined"
+      };
+
+      const ui = {
+        nInput: document.getElementById("nInput"),
+        mInput: document.getElementById("mInput"),
+        pInput: document.getElementById("pInput"),
+        pValue: document.getElementById("pValue"),
+        ratioInput: document.getElementById("ratioInput"),
+        joinInput: document.getElementById("joinInput"),
+        joinValue: document.getElementById("joinValue"),
+        leaveInput: document.getElementById("leaveInput"),
+        leaveValue: document.getElementById("leaveValue"),
+        voterInput: document.getElementById("voterInput"),
+        voterValue: document.getElementById("voterValue"),
+        clampNote: document.getElementById("clampNote"),
+        initStatus: document.getElementById("initStatus"),
+        playBtn: document.getElementById("playBtn"),
+        pauseBtn: document.getElementById("pauseBtn"),
+        stepBtn: document.getElementById("stepBtn"),
+        resetBtn: document.getElementById("resetBtn"),
+        metricStep: document.getElementById("metricStep"),
+        metricEdges: document.getElementById("metricEdges"),
+        metricSplit: document.getElementById("metricSplit"),
+        networkSvg: d3.select("#networkSvg")
+      };
+
+      const state = {
+        n: DEFAULTS.n,
+        m: DEFAULTS.m,
+        p: DEFAULTS.p,
+        initialA: DEFAULTS.initialA,
+        joiningRate: DEFAULTS.joiningRate,
+        leavingRate: DEFAULTS.leavingRate,
+        voterRate: DEFAULTS.voterRate,
+        mode: DEFAULTS.mode,
+        step: 0,
+        running: false,
+        rafId: null,
+        resizeTimer: null,
+        lastTick: 0,
+        edgeCount: 0,
+        opinions: new Uint8Array(0),
+        membership: [],
+        groupMembers: [],
+        nodes: [],
+        links: [],
+        chart: null,
+        appliedInitKey: "",
+        d3Ctx: {
+          width: 0,
+          height: 0,
+          root: null,
+          linkLayer: null,
+          nodeLayer: null,
+          linkSel: null,
+          nodeSel: null,
+          simulation: null
+        }
+      };
+
+      const COLORS = {
+        stateA: "#ff6f59",
+        stateB: "#2d7dd2",
+        group: "#2f4858"
+      };
+
+      const nodeFill = (node) => {
+        if (node.kind === "group") return COLORS.group;
+        return state.opinions[node.idx] === 1 ? COLORS.stateA : COLORS.stateB;
+      };
+
+      const linkKey = (link) => {
+        const s = typeof link.source === "object" ? link.source.id : link.source;
+        const t = typeof link.target === "object" ? link.target.id : link.target;
+        return s + "|" + t;
+      };
+
+      function getCurrentMode() {
+        const selected = document.querySelector('input[name="mode"]:checked');
+        return selected ? selected.value : "combined";
+      }
+
+      function applyDefaultControlValues() {
+        ui.nInput.value = String(DEFAULTS.n);
+        ui.mInput.value = String(DEFAULTS.m);
+        ui.pInput.value = DEFAULTS.p.toFixed(2);
+        ui.ratioInput.value = DEFAULTS.initialA.toFixed(1);
+        ui.joinInput.value = DEFAULTS.joiningRate.toFixed(2);
+        ui.leaveInput.value = DEFAULTS.leavingRate.toFixed(2);
+        ui.voterInput.value = DEFAULTS.voterRate.toFixed(2);
+        const modeInput = document.querySelector(`input[name="mode"][value="${DEFAULTS.mode}"]`);
+        if (modeInput) modeInput.checked = true;
+      }
+
+      function getInitKey(n, m, p, initialA) {
+        return `${n}|${m}|${Number(p).toFixed(2)}|${Number(initialA).toFixed(2)}`;
+      }
+
+      function currentInitKeyFromInputs() {
+        const rawN = Math.round(Number(ui.nInput.value));
+        const rawM = Math.round(Number(ui.mInput.value));
+        const n = Math.max(MIN_INDIVIDUALS, Math.min(MAX_INDIVIDUALS, Number.isFinite(rawN) ? rawN : state.n));
+        const m = Math.max(MIN_GROUPS, Math.min(MAX_GROUPS, Number.isFinite(rawM) ? rawM : state.m));
+        const p = Math.max(0.01, Math.min(0.25, Number(ui.pInput.value)));
+        const initialA = Math.max(0, Math.min(1, Number(ui.ratioInput.value)));
+        return getInitKey(n, m, p, initialA);
+      }
+
+      function updateInitStatus() {
+        const pending = state.appliedInitKey && currentInitKeyFromInputs() !== state.appliedInitKey;
+        if (pending) {
+          ui.initStatus.textContent = "Pending initialization changes. Press Reset to apply.";
+          ui.initStatus.className = "text-xs text-amber-700 min-h-[1rem]";
+          return;
+        }
+        ui.initStatus.textContent = "Initialization parameters currently applied.";
+        ui.initStatus.className = "text-xs text-teal-700 min-h-[1rem]";
+      }
+
+      function syncRateLabels() {
+        ui.pValue.textContent = Number(ui.pInput.value).toFixed(2);
+        ui.joinValue.textContent = Number(ui.joinInput.value).toFixed(2);
+        ui.leaveValue.textContent = Number(ui.leaveInput.value).toFixed(2);
+        ui.voterValue.textContent = Number(ui.voterInput.value).toFixed(2);
+      }
+
+      function readDynamicControls() {
+        state.joiningRate = Number(ui.joinInput.value);
+        state.leavingRate = Number(ui.leaveInput.value);
+        state.voterRate = Number(ui.voterInput.value);
+        state.mode = getCurrentMode();
+      }
+
+      function readInitializationControls() {
+        const notes = [];
+        const rawN = Math.round(Number(ui.nInput.value));
+        const rawM = Math.round(Number(ui.mInput.value));
+
+        let n = Number.isFinite(rawN) ? rawN : state.n;
+        let m = Number.isFinite(rawM) ? rawM : state.m;
+
+        if (!Number.isFinite(rawN) || n < MIN_INDIVIDUALS || n > MAX_INDIVIDUALS) {
+          notes.push(`n adjusted to [${MIN_INDIVIDUALS}, ${MAX_INDIVIDUALS}]`);
+        }
+        if (!Number.isFinite(rawM) || m < MIN_GROUPS || m > MAX_GROUPS) {
+          notes.push(`m adjusted to [${MIN_GROUPS}, ${MAX_GROUPS}]`);
+        }
+
+        n = Math.max(MIN_INDIVIDUALS, Math.min(MAX_INDIVIDUALS, n));
+        m = Math.max(MIN_GROUPS, Math.min(MAX_GROUPS, m));
+
+        if (n + m > MAX_TOTAL_NODES) {
+          const total = n + m;
+          n = Math.round(MAX_TOTAL_NODES * (n / total));
+          m = MAX_TOTAL_NODES - n;
+
+          n = Math.max(MIN_INDIVIDUALS, Math.min(MAX_INDIVIDUALS, n));
+          m = Math.max(MIN_GROUPS, Math.min(MAX_GROUPS, m));
+          if (n + m > MAX_TOTAL_NODES) {
+            n = Math.min(n, MAX_TOTAL_NODES - MIN_GROUPS);
+            m = Math.min(m, MAX_TOTAL_NODES - n);
+          }
+          notes.push(`capped to ${MAX_TOTAL_NODES} total nodes`);
+        }
+
+        ui.nInput.value = String(n);
+        ui.mInput.value = String(m);
+        ui.clampNote.textContent = notes.length ? `Note: ${notes.join("; ")}.` : "";
+
+        state.n = n;
+        state.m = m;
+        state.p = Number(ui.pInput.value);
+        state.initialA = Number(ui.ratioInput.value);
+        state.appliedInitKey = getInitKey(state.n, state.m, state.p, state.initialA);
+      }
+
+      function createNodes() {
+        const nodes = [];
+        for (let i = 0; i < state.n; i++) {
+          nodes.push({ id: `i${i}`, kind: "individual", idx: i });
+        }
+        for (let g = 0; g < state.m; g++) {
+          nodes.push({ id: `g${g}`, kind: "group", idx: g });
+        }
+        return nodes;
+      }
+
+      function addEdge(i, g) {
+        if (state.membership[i].has(g)) return;
+        state.membership[i].add(g);
+        state.groupMembers[g].add(i);
+        state.edgeCount++;
+      }
+
+      function removeEdge(i, g) {
+        if (!state.membership[i].has(g)) return;
+        state.membership[i].delete(g);
+        state.groupMembers[g].delete(i);
+        state.edgeCount--;
+      }
+
+      function pickRandomSetValue(set) {
+        if (set.size === 0) return -1;
+        const target = Math.floor(Math.random() * set.size);
+        let idx = 0;
+        for (const val of set) {
+          if (idx === target) return val;
+          idx++;
+        }
+        return -1;
+      }
+
+      function pickRandomUnconnectedGroup(existing) {
+        if (existing.size >= state.m) return -1;
+        for (let k = 0; k < 5; k++) {
+          const g = Math.floor(Math.random() * state.m);
+          if (!existing.has(g)) return g;
+        }
+        const start = Math.floor(Math.random() * state.m);
+        for (let offset = 0; offset < state.m; offset++) {
+          const g = (start + offset) % state.m;
+          if (!existing.has(g)) return g;
+        }
+        return -1;
+      }
+
+      function buildLinkArray() {
+        const links = [];
+        for (let i = 0; i < state.n; i++) {
+          for (const g of state.membership[i]) {
+            links.push({ source: `i${i}`, target: `g${g}` });
+          }
+        }
+        return links;
+      }
+
+      function initializeGraphModel() {
+        state.step = 0;
+        state.edgeCount = 0;
+        state.opinions = new Uint8Array(state.n);
+        state.membership = Array.from({ length: state.n }, () => new Set());
+        state.groupMembers = Array.from({ length: state.m }, () => new Set());
+
+        for (let i = 0; i < state.n; i++) {
+          state.opinions[i] = Math.random() < state.initialA ? 1 : 0;
+        }
+
+        for (let i = 0; i < state.n; i++) {
+          for (let g = 0; g < state.m; g++) {
+            if (Math.random() < state.p) addEdge(i, g);
+          }
+        }
+
+        // Keep agents and groups reachable to avoid trivial dead states.
+        for (let i = 0; i < state.n; i++) {
+          if (state.membership[i].size === 0) addEdge(i, Math.floor(Math.random() * state.m));
+        }
+        for (let g = 0; g < state.m; g++) {
+          if (state.groupMembers[g].size === 0) addEdge(Math.floor(Math.random() * state.n), g);
+        }
+
+        state.nodes = createNodes();
+        state.links = buildLinkArray();
+      }
+
+      function computeGroupStats() {
+        const size = new Int16Array(state.m);
+        const countA = new Int16Array(state.m);
+        for (let g = 0; g < state.m; g++) {
+          const members = state.groupMembers[g];
+          size[g] = members.size;
+          let a = 0;
+          for (const i of members) a += state.opinions[i];
+          countA[g] = a;
+        }
+        return { size, countA };
+      }
+
+      function runSchellingUpdate() {
+        const { size, countA } = computeGroupStats();
+        const removals = [];
+        const additions = [];
+
+        for (let i = 0; i < state.n; i++) {
+          const opinion = state.opinions[i];
+
+          for (const g of state.membership[i]) {
+            if (size[g] <= 1) continue;
+            const a = countA[g];
+            const b = size[g] - a;
+            const ownCount = opinion === 1 ? a : b;
+            const ownShare = ownCount / size[g];
+            if (ownShare >= 0.5) continue;
+
+            // Minority pressure is 0 at a tie (0.5) and 1 when fully outnumbered (0.0).
+            const minorityPressure = (0.5 - ownShare) / 0.5;
+            const leaveProb = state.leavingRate * minorityPressure;
+            if (Math.random() < leaveProb) {
+              removals.push([i, g]);
+            }
+          }
+
+          if (Math.random() < state.joiningRate) {
+            const g = pickRandomUnconnectedGroup(state.membership[i]);
+            if (g >= 0) additions.push([i, g]);
+          }
+        }
+
+        for (const [i, g] of removals) removeEdge(i, g);
+        for (const [i, g] of additions) addEdge(i, g);
+      }
+
+      function runVoterUpdate() {
+        const { size, countA } = computeGroupStats();
+        const next = new Int8Array(state.n);
+        next.fill(-1);
+
+        for (let i = 0; i < state.n; i++) {
+          if (state.membership[i].size === 0) continue;
+          if (Math.random() >= state.voterRate) continue;
+
+          const g = pickRandomSetValue(state.membership[i]);
+          if (g < 0 || size[g] === 0) continue;
+
+          const a = countA[g];
+          const b = size[g] - a;
+          if (a === b) continue;
+
+          const majority = a > b ? 1 : 0;
+          if (majority !== state.opinions[i]) next[i] = majority;
+        }
+
+        for (let i = 0; i < state.n; i++) {
+          if (next[i] >= 0) state.opinions[i] = next[i];
+        }
+      }
+
+      function updateD3Links() {
+        state.links = buildLinkArray();
+        const ctx = state.d3Ctx;
+        ctx.linkSel = ctx.linkLayer.selectAll("line")
+          .data(state.links, linkKey)
+          .join(
+            (enter) => enter.append("line")
+              .attr("stroke", "var(--edge)")
+              .attr("stroke-width", 1.1),
+            (update) => update,
+            (exit) => exit.remove()
+          );
+        ctx.simulation.force("link").links(state.links);
+      }
+
+      function updateNodeStyles() {
+        state.d3Ctx.nodeSel.attr("fill", nodeFill);
+      }
+
+      function updateMetrics(pushHistory = true) {
+        let countA = 0;
+        for (let i = 0; i < state.n; i++) countA += state.opinions[i];
+        const countB = state.n - countA;
+        const pctA = (100 * countA / state.n).toFixed(1);
+        const pctB = (100 * countB / state.n).toFixed(1);
+
+        ui.metricStep.textContent = String(state.step);
+        ui.metricEdges.textContent = String(state.edgeCount);
+        ui.metricSplit.textContent = `A ${pctA}% | B ${pctB}%`;
+
+        if (!pushHistory || !state.chart) return;
+        const data = state.chart.data;
+        data.labels.push(state.step);
+        data.datasets[0].data.push(countA / state.n);
+        data.datasets[1].data.push(countB / state.n);
+        if (data.labels.length > HISTORY_LIMIT) {
+          data.labels.shift();
+          data.datasets[0].data.shift();
+          data.datasets[1].data.shift();
+        }
+        state.chart.update("none");
+      }
+
+      function simulationStep() {
+        readDynamicControls();
+        if (state.mode === "schelling" || state.mode === "combined") runSchellingUpdate();
+        if (state.mode === "voter" || state.mode === "combined") runVoterUpdate();
+        state.step++;
+        updateD3Links();
+        updateNodeStyles();
+        state.d3Ctx.simulation.alpha(0.35).restart();
+        updateMetrics(true);
+      }
+
+      function stop() {
+        state.running = false;
+        if (state.rafId !== null) cancelAnimationFrame(state.rafId);
+        state.rafId = null;
+      }
+
+      function loop(timestamp) {
+        if (!state.running) return;
+        if (timestamp - state.lastTick >= STEP_INTERVAL_MS) {
+          simulationStep();
+          state.lastTick = timestamp;
+        }
+        state.rafId = requestAnimationFrame(loop);
+      }
+
+      function start() {
+        if (state.running) return;
+        state.running = true;
+        state.lastTick = performance.now();
+        state.rafId = requestAnimationFrame(loop);
+      }
+
+      function setupChart() {
+        const ctx = document.getElementById("opinionChart");
+        if (state.chart) state.chart.destroy();
+        state.chart = new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: [],
+            datasets: [
+              {
+                label: "State A",
+                data: [],
+                borderColor: "#ff6f59",
+                backgroundColor: "rgba(255, 111, 89, 0.17)",
+                borderWidth: 2,
+                fill: true,
+                tension: 0.25,
+                pointRadius: 0
+              },
+              {
+                label: "State B",
+                data: [],
+                borderColor: "#2d7dd2",
+                backgroundColor: "rgba(45, 125, 210, 0.15)",
+                borderWidth: 2,
+                fill: true,
+                tension: 0.25,
+                pointRadius: 0
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            normalized: true,
+            scales: {
+              y: {
+                min: 0,
+                max: 1,
+                ticks: { color: "#48656f" },
+                title: { display: true, text: "Proportion", color: "#48656f" },
+                grid: { color: "rgba(72, 101, 111, 0.12)" }
+              },
+              x: {
+                ticks: { color: "#48656f", maxTicksLimit: 8 },
+                title: { display: true, text: "Simulation Step", color: "#48656f" },
+                grid: { color: "rgba(72, 101, 111, 0.08)" }
+              }
+            },
+            plugins: {
+              legend: {
+                labels: { boxWidth: 14, color: "#34525d" }
+              },
+              tooltip: {
+                callbacks: {
+                  label: (item) => `${item.dataset.label}: ${(item.raw * 100).toFixed(1)}%`
+                }
+              }
+            }
+          }
+        });
+      }
+
+      function buildForceGraph() {
+        if (state.d3Ctx.simulation) {
+          state.d3Ctx.simulation.stop();
+        }
+
+        const svgNode = ui.networkSvg.node();
+        const bounds = svgNode.getBoundingClientRect();
+        const width = Math.max(420, Math.floor(bounds.width));
+        const height = Math.max(320, Math.floor(bounds.height));
+
+        ui.networkSvg.selectAll("*").remove();
+        ui.networkSvg.attr("viewBox", `0 0 ${width} ${height}`);
+
+        const root = ui.networkSvg.append("g");
+        const linkLayer = root.append("g");
+        const nodeLayer = root.append("g");
+
+        ui.networkSvg.call(
+          d3.zoom()
+            .scaleExtent([0.5, 3.2])
+            .on("zoom", (event) => root.attr("transform", event.transform))
+        );
+
+        const nodeSymbol = d3.symbol();
+        const nodeSel = nodeLayer.selectAll("path")
+          .data(state.nodes, (d) => d.id)
+          .join("path")
+          .attr("d", (d) => {
+            const type = d.kind === "group" ? d3.symbolSquare : d3.symbolCircle;
+            const size = d.kind === "group" ? 170 : 92;
+            return nodeSymbol.type(type).size(size)();
+          })
+          .attr("fill", nodeFill)
+          .attr("stroke", (d) => d.kind === "group" ? "#16343f" : "#ffffff")
+          .attr("stroke-width", 1.1)
+          .style("cursor", "grab");
+
+        const simulation = d3.forceSimulation(state.nodes)
+          .force("link", d3.forceLink(state.links).id((d) => d.id).distance(62).strength(0.16))
+          .force("charge", d3.forceManyBody().strength((d) => d.kind === "group" ? -220 : -78))
+          .force("center", d3.forceCenter(width / 2, height / 2))
+          .force("collision", d3.forceCollide().radius((d) => d.kind === "group" ? 11 : 8))
+          .alpha(0.9)
+          .alphaDecay(0.045);
+
+        const drag = d3.drag()
+          .on("start", (event, d) => {
+            if (!event.active) simulation.alphaTarget(0.24).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+          })
+          .on("drag", (event, d) => {
+            d.fx = event.x;
+            d.fy = event.y;
+          })
+          .on("end", (event, d) => {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+          });
+
+        nodeSel.call(drag);
+
+        const linkSel = linkLayer.selectAll("line")
+          .data(state.links, linkKey)
+          .join("line")
+          .attr("stroke", "var(--edge)")
+          .attr("stroke-width", 1.1);
+
+        simulation.on("tick", () => {
+          for (const n of state.nodes) {
+            n.x = Math.max(10, Math.min(width - 10, n.x));
+            n.y = Math.max(10, Math.min(height - 10, n.y));
+          }
+
+          state.d3Ctx.linkSel
+            .attr("x1", (d) => d.source.x)
+            .attr("y1", (d) => d.source.y)
+            .attr("x2", (d) => d.target.x)
+            .attr("y2", (d) => d.target.y);
+
+          nodeSel.attr("transform", (d) => `translate(${d.x},${d.y})`);
+        });
+
+        state.d3Ctx = { width, height, root, linkLayer, nodeLayer, linkSel, nodeSel, simulation };
+      }
+
+      function resetSimulation() {
+        stop();
+        readInitializationControls();
+        readDynamicControls();
+        initializeGraphModel();
+        buildForceGraph();
+        setupChart();
+        updateMetrics(false);
+        updateMetrics(true);
+        updateInitStatus();
+      }
+
+      function bindEvents() {
+        [ui.joinInput, ui.leaveInput, ui.voterInput].forEach((el) =>
+          el.addEventListener("input", () => {
+            syncRateLabels();
+            readDynamicControls();
+          })
+        );
+
+        [ui.nInput, ui.mInput, ui.pInput].forEach((el) =>
+          el.addEventListener("input", () => {
+            syncRateLabels();
+            updateInitStatus();
+          })
+        );
+
+        ui.ratioInput.addEventListener("change", updateInitStatus);
+
+        document.querySelectorAll('input[name="mode"]').forEach((input) => {
+          input.addEventListener("change", readDynamicControls);
+        });
+
+        ui.playBtn.addEventListener("click", start);
+        ui.pauseBtn.addEventListener("click", stop);
+        ui.stepBtn.addEventListener("click", () => {
+          stop();
+          simulationStep();
+        });
+        ui.resetBtn.addEventListener("click", resetSimulation);
+
+        window.addEventListener("resize", () => {
+          if (state.resizeTimer !== null) clearTimeout(state.resizeTimer);
+          state.resizeTimer = setTimeout(() => {
+            // Rebuild graph on resize to keep force center and view box consistent.
+            const currentStep = state.step;
+            const wasRunning = state.running;
+            stop();
+            buildForceGraph();
+            updateNodeStyles();
+            state.step = currentStep;
+            updateMetrics(false);
+            if (wasRunning) start();
+            state.resizeTimer = null;
+          }, 120);
+        });
+      }
+
+      applyDefaultControlValues();
+      syncRateLabels();
+      bindEvents();
+      resetSimulation();
+    })();
+  </script>
+</body>
+</html>
